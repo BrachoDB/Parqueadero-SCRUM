@@ -1,9 +1,8 @@
 # Auditoría estática del backend
 
-Alcance: revisión estática de `backend/main.py`, `backend/database/schema.sql` y
-`parqueadero/api.py`. No se ejecutaron pruebas de penetración. La aplicación
-principal del contenedor es `backend.main:app`; `parqueadero.api:app` es una
-segunda aplicación FastAPI independiente.
+Alcance: revisión estática de `backend/main.py` y `backend/database/schema.sql`.
+No se ejecutaron pruebas de penetración. La aplicación principal del contenedor
+es `backend.main:app`.
 
 ## Hallazgos
 
@@ -27,5 +26,4 @@ segunda aplicación FastAPI independiente.
 - El despliegue de Compose no publica servicios de base de datos adicionales:
   SQLite está integrado en el proceso y el almacenamiento se conserva en un volumen.
 - Las cuentas se provisionan con `python -m backend.manage_users`; las cuentas
-  conocidas están limitadas al seeder de pruebas y no se crean automáticamente
-  en producción.
+  conocidas no se crean automáticamente en producción.

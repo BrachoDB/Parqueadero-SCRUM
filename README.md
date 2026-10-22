@@ -336,9 +336,7 @@ docker compose exec api python -m backend.manage_users --username operador1 --ro
 ```
 
 Las contraseñas deben tener al menos 12 caracteres y se almacenan con PBKDF2-SHA256
-y sal aleatoria. Las cuentas de prueba se crean únicamente desde
-[`tests/seeders.py`](tests/seeders.py); sus credenciales no son válidas en producción.
-Basic Auth no cifra el tráfico: despliega detrás de HTTPS/TLS y no expongas el
+y sal aleatoria. Basic Auth no cifra el tráfico: despliega detrás de HTTPS/TLS y no expongas el
 servicio directamente por HTTP en producción.
 
 ### Ejecutar con Docker Compose
@@ -351,13 +349,7 @@ Para detener el servicio sin borrar los datos, ejecuta `docker compose down`.
 
 ### Contratos OpenAPI y auditoría
 - API principal: [`backend/openapi.json`](backend/openapi.json)
-- API independiente de cálculo: [`parqueadero/openapi.json`](parqueadero/openapi.json)
 - Auditoría estática: [`backend/SECURITY_AUDIT.md`](backend/SECURITY_AUDIT.md)
-
-### 5. Ejecutar pruebas
-```bash
-pytest tests/test_rendimiento_sla.py -v
-```
 
 ---
 
@@ -431,9 +423,6 @@ Parqueadero-SCRUM/
 │   └── database/
 │       ├── schema.sql           # Esquema BD + Índices (Dev 1 + Dev 2)
 │       └── parqueadero.db       # Base de datos SQLite (auto-generada)
-│
-├── tests/
-│   └── test_rendimiento_sla.py  # Tests SLA ≤ 2s y funcionales (Dev 2)
 │
 └── README.md                    # Documentación oficial (Dev 3)
 ```
