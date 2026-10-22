@@ -29,7 +29,7 @@ def setup_db():
     # Cleanup: eliminar todos los registros insertados por los tests
     test_placas = [
         'TST%',    # placa_prueba fixture
-        'TSTREN01', 'TSTCNC01',  # tests de rendimiento
+        'TST12A', 'TST34B',  # tests de rendimiento
         'ABC123', 'DUP456', 'XYZ789', 'ABC12D'  # tests funcionales
     ]
     with sqlite3.connect(DB_PATH) as conn:
@@ -47,7 +47,7 @@ def client():
 
 @pytest.fixture
 def placa_prueba():
-    return f"TST{datetime.now().strftime('%H%M%S')[0:3]}01"
+    return f"TST{datetime.now().strftime('%H%M%S')[0:2]}A"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ class TestRendimientoSLA:
     def test_consulta_tarifa_tiempo_respuesta(self, client):
         """RF-01 Rendimiento: Consulta de tarifa debe completarse en ≤ 2s."""
         # Asegurar que existe al menos un registro activo
-        placa = "TSTREN01"
+        placa = "TST12A"
         client.post("/api/v1/vehiculos/entrada", json={
             "placa": placa, "tipo_vehiculo_id": 2
         })
@@ -132,7 +132,7 @@ class TestRendimientoSLA:
         """
         import concurrent.futures
 
-        placa = "TSTCNC01"
+        placa = "TST34B"
         client.post("/api/v1/vehiculos/entrada", json={
             "placa": placa, "tipo_vehiculo_id": 3
         })
