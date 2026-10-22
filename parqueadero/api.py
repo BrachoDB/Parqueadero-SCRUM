@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .calculo import ErrorDeCalculo, Tarifa, calcular_costo
+from .tarifas import ErrorVehiculoDesconocido, TipoVehiculo, calcular_costo_por_tipo
 
 app = FastAPI(
     title="API del Parqueadero",
@@ -67,3 +68,53 @@ def calcular_tarifa(peticion: CalculoRequest) -> CalculoResponse:
         horas_cobradas=resultado.horas_cobradas,
         costo=resultado.costo,
     )
+
+
+class CalculoVehiculoRequest(BaseModel):
+    """Petición que identifica el vehículo por su tipo (RF-02)."""
+
+    tipo_vehiculo: TipoVehiculo = Field(
+        ..., description="Tipo de vehículo (carro, moto, camioneta, bus, camion)."
+    )
+    hora_entrada: datetime = Field(..., description="Hora de entrada del vehículo.")
+    hora_salida: datetime = Field(..., description="Hora de salida del vehículo.")
+
+
+@app.post("/calcular-tarifa-vehiculo", response_model=CalculoResponse)
+def calcular_tarifa_vehiculo(peticion: CalculoVehiculoRequest) -> CalculoResponse:
+    """Calcula el costo usando la tarifa diferencial según el tipo de vehículo."""
+    try:
+        resultado = calcular_costo_por_tipo(
+            entrada=peticion.hora_entrada,
+            salida=peticion.hora_salida,
+            tipo=peticion.tipo_vehiculo,
+        )
+    except ErrorVehiculoDesconocido as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ErrorDeCalculo as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return CalculoResponse(
+        minutos_estadia=resultado.minutos_estadia,
+        minutos_cobrados=resultado.minutos_cobrados,
+        horas_cobradas=resultado.horas_cobradas,
+        costo=resultado.costo,
+    )
+
+
+@app.get("/tarifas")
+def listar_tarifas() -> list[dict]:
+    """Lista las tarifas diferenciales por tipo de vehículo (RF-02)."""
+    from .tarifas import CATALOGO_DEFECTO
+
+    return [
+        {
+            "tipo_vehiculo": detalle.tipo.value,
+            "descripcion": detalle.descripcion,
+            "valor_hora": str(detalle.tarifa.valor_hora),
+            "minutos_minimos": detalle.tarifa.minutos_minimos,
+        }
+        for detalle in (
+            CATALOGO_DEFECTO.detalle_para(t) for t in CATALOGO_DEFECTO.tipos()
+        )
+    ]
