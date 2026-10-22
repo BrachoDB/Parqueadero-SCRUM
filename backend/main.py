@@ -8,11 +8,20 @@
 """
 
 from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
 from contextlib import asynccontextmanager
 from typing import Optional
 from datetime import datetime, date
+from backend.auth import (
+    AuthenticatedUser,
+    DUMMY_PASSWORD_HASH,
+    DUMMY_SALT,
+    ROLE_NAMES,
+    hash_password,
+    verify_password,
+)
 import sqlite3
 import time
 import math
@@ -34,7 +43,10 @@ logger = logging.getLogger("parqueadero")
 # Rutas absolutas basadas en la ubicación real de este archivo
 # ─────────────────────────────────────────────────────────────
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(_BASE_DIR, "database", "parqueadero.db")
+DB_PATH = os.environ.get(
+    "PARQUEADERO_DB_PATH",
+    os.path.join(_BASE_DIR, "database", "parqueadero.db"),
+)
 SCHEMA_PATH = os.path.join(_BASE_DIR, "database", "schema.sql")
 
 # ─────────────────────────────────────────────────────────────
@@ -51,6 +63,7 @@ def get_db():
     """Conexión a SQLite con optimizaciones para rendimiento ≤ 2s (Dev 2)."""
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON;")
 
     # Dev 2: Pragmas de rendimiento SQLite
     conn.execute("PRAGMA journal_mode=WAL;")          # Write-Ahead Logging
@@ -69,6 +82,7 @@ def init_db():
     """Inicializa la base de datos con el schema."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA cache_size=-16000;")
@@ -77,6 +91,19 @@ def init_db():
         if os.path.exists(SCHEMA_PATH):
             with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
                 conn.executescript(f.read())
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(vehiculos_registro)")
+        }
+        if "cliente_id" not in columns:
+            conn.execute(
+                "ALTER TABLE vehiculos_registro ADD COLUMN cliente_id INTEGER "
+                "REFERENCES auth_users(id)"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_cliente_registro "
+            "ON vehiculos_registro(cliente_id, hora_entrada)"
+        )
         conn.commit()
     logger.info("✅ Base de datos inicializada correctamente.")
 
@@ -134,6 +161,82 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+basic_auth = HTTPBasic(auto_error=False)
+AUTH_RESPONSES = {
+    401: {"description": "Credenciales Basic Auth ausentes o inválidas."},
+    403: {"description": "Credenciales válidas, pero el rol no permite la operación."},
+}
+
+
+def get_current_user(
+    credentials: Optional[HTTPBasicCredentials] = Depends(basic_auth),
+    db: sqlite3.Connection = Depends(get_db),
+) -> AuthenticatedUser:
+    """Authenticate an HTTP Basic credential against the user table."""
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Se requieren credenciales Basic Auth.",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+    row = db.execute(
+        "SELECT id, username, role, password_salt, password_hash, active "
+        "FROM auth_users WHERE username = ?",
+        (credentials.username,),
+    ).fetchone()
+    salt = row["password_salt"] if row else DUMMY_SALT.hex()
+    password_hash = row["password_hash"] if row else DUMMY_PASSWORD_HASH.hex()
+    valid_password = verify_password(credentials.password, salt, password_hash)
+
+    if not row or not row["active"] or not valid_password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales inválidas.",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+    return AuthenticatedUser(id=row["id"], username=row["username"], role=row["role"])
+
+
+def require_roles(*allowed_roles: str):
+    """Create a dependency that rejects authenticated users outside the role set."""
+    if not allowed_roles or not set(allowed_roles).issubset(ROLE_NAMES):
+        raise ValueError("Debe especificarse al menos un rol válido.")
+
+    def check_role(
+        user: AuthenticatedUser = Depends(get_current_user),
+    ) -> AuthenticatedUser:
+        if user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tiene permisos para realizar esta operación.",
+            )
+        return user
+
+    return check_role
+
+
+def create_user(db: sqlite3.Connection, username: str, password: str, role: str) -> int:
+    """Insert a user with a validated role and a salted password hash."""
+    username = username.strip()
+    if not username or ":" in username:
+        raise ValueError("El usuario no puede estar vacío ni contener ':'.")
+    if role not in ROLE_NAMES:
+        raise ValueError("El rol debe ser admin, operador o cliente.")
+    if len(password) < 12:
+        raise ValueError("La contraseña debe tener al menos 12 caracteres.")
+    if len(password.encode("utf-8")) > 1024:
+        raise ValueError("La contraseña no puede exceder 1024 bytes.")
+
+    salt, password_hash = hash_password(password)
+    cursor = db.execute(
+        "INSERT INTO auth_users (username, password_salt, password_hash, role) "
+        "VALUES (?, ?, ?, ?)",
+        (username, salt, password_hash, role),
+    )
+    return cursor.lastrowid
+
 
 # ─────────────────────────────────────────────────────────────
 # MODELOS PYDANTIC (Pydantic v2 compatible)
@@ -147,6 +250,7 @@ class RegistroEntradaRequest(BaseModel):
     placa: str
     tipo_vehiculo_id: int
     operador_id: Optional[int] = None
+    cliente_id: Optional[int] = None
     observaciones: Optional[str] = None
 
     @field_validator("placa", mode="before")
@@ -211,11 +315,13 @@ class TarifaConsultaResponse(BaseModel):
     response_model=RegistroResponse,
     status_code=status.HTTP_201_CREATED,
     summary="RF-01: Registrar entrada de vehículo",
-    tags=["Registro de Vehículos"]
+    tags=["Registro de Vehículos"],
+    responses=AUTH_RESPONSES,
 )
 def registrar_entrada(
     req: RegistroEntradaRequest,
-    db: sqlite3.Connection = Depends(get_db)
+    db: sqlite3.Connection = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_roles("admin", "operador")),
 ):
     """
     **RF-01**: Registra la entrada de un vehículo al parqueadero.
@@ -246,6 +352,17 @@ def registrar_entrada(
             detail=f"Tipo de vehículo ID={req.tipo_vehiculo_id} no encontrado."
         )
 
+    if req.cliente_id is not None:
+        cliente = db.execute(
+            "SELECT id FROM auth_users WHERE id = ? AND role = 'cliente' AND active = 1",
+            (req.cliente_id,),
+        ).fetchone()
+        if not cliente:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Cliente no encontrado.",
+            )
+
     # ── RF-01: Capturar timestamp de entrada server-side
     hora_entrada = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -253,15 +370,16 @@ def registrar_entrada(
     cursor = db.execute(
         """
         INSERT INTO vehiculos_registro
-            (placa, tipo_vehiculo_id, hora_entrada, tarifa_aplicada, estado, operador_id, observaciones)
-        VALUES (?, ?, ?, ?, 'ACTIVO', ?, ?)
+            (placa, tipo_vehiculo_id, hora_entrada, tarifa_aplicada, estado, operador_id, cliente_id, observaciones)
+        VALUES (?, ?, ?, ?, 'ACTIVO', ?, ?, ?)
         """,
         (
             req.placa,
             req.tipo_vehiculo_id,
             hora_entrada,
             tarifa_info["tarifa_hora"],
-            req.operador_id,
+            user.id,
+            req.cliente_id,
             req.observaciones
         )
     )
@@ -289,9 +407,14 @@ def registrar_entrada(
     "/api/v1/vehiculos/{placa}/tarifa",
     response_model=TarifaConsultaResponse,
     summary="RF-01 Rendimiento: Consultar tarifa acumulada (≤ 2s SLA)",
-    tags=["Tarifas & Rendimiento"]
+    tags=["Tarifas & Rendimiento"],
+    responses=AUTH_RESPONSES,
 )
-def consultar_tarifa(placa: str, db: sqlite3.Connection = Depends(get_db)):
+def consultar_tarifa(
+    placa: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_roles("admin", "operador", "cliente")),
+):
     """
     **RF-01 Rendimiento**: Muestra la tarifa acumulada de un vehículo.
     - Garantía SLA: tiempo de respuesta ≤ **2000 ms**.
@@ -308,6 +431,7 @@ def consultar_tarifa(placa: str, db: sqlite3.Connection = Depends(get_db)):
             vr.id,
             vr.placa,
             vr.tipo_vehiculo_id,
+            vr.cliente_id,
             vr.hora_entrada,
             CAST(
                 (JULIANDAY('now','localtime') - JULIANDAY(vr.hora_entrada)) * 1440
@@ -329,6 +453,11 @@ def consultar_tarifa(placa: str, db: sqlite3.Connection = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No se encontró un registro activo para la placa {placa}."
+        )
+    if user.role == "cliente" and row["cliente_id"] != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No se encontró un registro activo para la placa {placa}.",
         )
 
     t_ms = (time.perf_counter() - t_inicio) * 1000
@@ -358,9 +487,14 @@ def consultar_tarifa(placa: str, db: sqlite3.Connection = Depends(get_db)):
     "/api/v1/vehiculos/salida",
     status_code=status.HTTP_200_OK,
     summary="RF-03: Registrar salida y calcular cobro total",
-    tags=["Registro de Vehículos"]
+    tags=["Registro de Vehículos"],
+    responses=AUTH_RESPONSES,
 )
-def registrar_salida(req: RegistroSalidaRequest, db: sqlite3.Connection = Depends(get_db)):
+def registrar_salida(
+    req: RegistroSalidaRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_roles("admin", "operador")),
+):
     """
     **RF-03**: Registra la salida, calcula tiempo parqueado y cobra según tarifa.
     - Cálculo: `ceil(minutos / 60) * tarifa_hora`
@@ -433,11 +567,13 @@ def registrar_salida(req: RegistroSalidaRequest, db: sqlite3.Connection = Depend
 @app.get(
     "/api/v1/reportes/arqueo",
     summary="RF-04: Reporte de arqueo de caja",
-    tags=["Reportes"]
+    tags=["Reportes"],
+    responses=AUTH_RESPONSES,
 )
 def arqueo_caja(
     fecha: Optional[date] = None,
-    db: sqlite3.Connection = Depends(get_db)
+    db: sqlite3.Connection = Depends(get_db),
+    _user: AuthenticatedUser = Depends(require_roles("admin")),
 ):
     """
     **RF-04**: Genera el reporte de arqueo de caja para una fecha dada.
@@ -496,12 +632,25 @@ def arqueo_caja(
 @app.get(
     "/api/v1/vehiculos/activos",
     summary="Vehículos actualmente en el parqueadero",
-    tags=["Registro de Vehículos"]
+    tags=["Registro de Vehículos"],
+    responses=AUTH_RESPONSES,
 )
-def vehiculos_activos(db: sqlite3.Connection = Depends(get_db)):
+def vehiculos_activos(
+    db: sqlite3.Connection = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_roles("admin", "operador", "cliente")),
+):
     """Lista todos los vehículos que actualmente están dentro del parqueadero."""
     t_inicio = time.perf_counter()
-    rows = db.execute("SELECT * FROM vehiculos_activos ORDER BY hora_entrada").fetchall()
+    rows = db.execute(
+        """
+        SELECT va.*
+        FROM vehiculos_activos va
+        JOIN vehiculos_registro vr ON vr.id = va.id
+        WHERE (? != 'cliente' OR vr.cliente_id = ?)
+        ORDER BY va.hora_entrada
+        """,
+        (user.role, user.id),
+    ).fetchall()
     t_ms = (time.perf_counter() - t_inicio) * 1000
 
     return {
@@ -518,9 +667,12 @@ def vehiculos_activos(db: sqlite3.Connection = Depends(get_db)):
 @app.get(
     "/api/v1/tarifas",
     summary="RF-02: Consultar tipos de vehículo y tarifas diferenciales",
-    tags=["Tarifas & Rendimiento"]
+    tags=["Tarifas & Rendimiento"],
+    responses=AUTH_RESPONSES,
 )
-def listar_tarifas():
+def listar_tarifas(
+    _user: AuthenticatedUser = Depends(require_roles("admin", "operador")),
+):
     """**RF-02**: Retorna los tipos de vehículo con sus tarifas diferenciales desde caché."""
     return {
         "tarifas": [
@@ -541,3 +693,29 @@ def health_check():
         "version": "1.0.0",
         "cache_tarifas_activo": len(_CACHE_TARIFAS) > 0
     }
+
+
+@app.get(
+    "/api/v1/clientes/me/vehiculos",
+    summary="Consultar el historial de vehículos asociados al cliente autenticado",
+    tags=["Registro de Vehículos"],
+    responses=AUTH_RESPONSES,
+)
+def mis_vehiculos(
+    db: sqlite3.Connection = Depends(get_db),
+    user: AuthenticatedUser = Depends(require_roles("cliente")),
+):
+    """Return only the parking records owned by the authenticated customer."""
+    rows = db.execute(
+        """
+        SELECT vr.id, vr.placa, vr.hora_entrada, vr.hora_salida, vr.estado,
+               vr.tiempo_parqueado_min AS minutos_parqueado,
+               vr.total_cobrado, tv.nombre AS tipo_vehiculo
+        FROM vehiculos_registro vr
+        JOIN tipos_vehiculo tv ON tv.id = vr.tipo_vehiculo_id
+        WHERE vr.cliente_id = ?
+        ORDER BY vr.hora_entrada DESC
+        """,
+        (user.id,),
+    ).fetchall()
+    return {"total": len(rows), "vehiculos": [dict(row) for row in rows]}

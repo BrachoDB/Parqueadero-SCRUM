@@ -5,19 +5,28 @@ Expone el RF-03 (calculo por tiempo y tarifa) como endpoint HTTP.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime
 from decimal import Decimal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .calculo import ErrorDeCalculo, Tarifa, calcular_costo
 from .tarifas import ErrorVehiculoDesconocido, TipoVehiculo, calcular_costo_por_tipo
+from backend.main import AUTH_RESPONSES, AuthenticatedUser, init_db, require_roles
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    init_db()
+    yield
 
 app = FastAPI(
     title="API del Parqueadero",
     description="Cálculo de tarifa por tiempo y tipo de vehículo.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 
@@ -47,8 +56,15 @@ def salud() -> dict:
     return {"estado": "ok"}
 
 
-@app.post("/calcular-tarifa", response_model=CalculoResponse)
-def calcular_tarifa(peticion: CalculoRequest) -> CalculoResponse:
+@app.post(
+    "/calcular-tarifa",
+    response_model=CalculoResponse,
+    responses=AUTH_RESPONSES,
+)
+def calcular_tarifa(
+    peticion: CalculoRequest,
+    _user: AuthenticatedUser = Depends(require_roles("admin", "operador", "cliente")),
+) -> CalculoResponse:
     """Calcula el costo del parqueadero por tiempo transcurrido."""
     try:
         resultado = calcular_costo(
@@ -80,8 +96,15 @@ class CalculoVehiculoRequest(BaseModel):
     hora_salida: datetime = Field(..., description="Hora de salida del vehículo.")
 
 
-@app.post("/calcular-tarifa-vehiculo", response_model=CalculoResponse)
-def calcular_tarifa_vehiculo(peticion: CalculoVehiculoRequest) -> CalculoResponse:
+@app.post(
+    "/calcular-tarifa-vehiculo",
+    response_model=CalculoResponse,
+    responses=AUTH_RESPONSES,
+)
+def calcular_tarifa_vehiculo(
+    peticion: CalculoVehiculoRequest,
+    _user: AuthenticatedUser = Depends(require_roles("admin", "operador", "cliente")),
+) -> CalculoResponse:
     """Calcula el costo usando la tarifa diferencial según el tipo de vehículo."""
     try:
         resultado = calcular_costo_por_tipo(
@@ -102,8 +125,10 @@ def calcular_tarifa_vehiculo(peticion: CalculoVehiculoRequest) -> CalculoRespons
     )
 
 
-@app.get("/tarifas")
-def listar_tarifas() -> list[dict]:
+@app.get("/tarifas", responses=AUTH_RESPONSES)
+def listar_tarifas(
+    _user: AuthenticatedUser = Depends(require_roles("admin", "operador", "cliente")),
+) -> list[dict]:
     """Lista las tarifas diferenciales por tipo de vehículo (RF-02)."""
     from .tarifas import CATALOGO_DEFECTO
 

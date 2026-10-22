@@ -23,6 +23,17 @@ INSERT OR IGNORE INTO tipos_vehiculo (nombre, tarifa_hora, descripcion) VALUES
     ('Carro',  4000.00, 'Automóviles particulares y taxis'),
     ('Camión', 7000.00, 'Vehículos de carga y buses');
 
+-- Usuarios autenticados; las contraseñas se almacenan como hashes PBKDF2.
+CREATE TABLE IF NOT EXISTS auth_users (
+    id              INTEGER       PRIMARY KEY AUTOINCREMENT,
+    username        VARCHAR(100)  NOT NULL UNIQUE,
+    password_salt   VARCHAR(64)   NOT NULL,
+    password_hash   VARCHAR(128)  NOT NULL,
+    role            VARCHAR(20)   NOT NULL CHECK(role IN ('admin','operador','cliente')),
+    active          BOOLEAN       NOT NULL DEFAULT 1,
+    created_at      DATETIME      NOT NULL DEFAULT (DATETIME('now','localtime'))
+);
+
 -- ───────────────────────────────────────────────────────────
 -- TABLA: vehiculos_registro
 -- RF-01: Registro de vehículo por placa y hora de entrada
@@ -39,6 +50,7 @@ CREATE TABLE IF NOT EXISTS vehiculos_registro (
     estado              VARCHAR(20)   NOT NULL DEFAULT 'ACTIVO' 
                             CHECK(estado IN ('ACTIVO','LIQUIDADO','ANULADO')),
     operador_id         INTEGER,
+    cliente_id          INTEGER       REFERENCES auth_users(id),
     observaciones       TEXT,
     created_at          DATETIME      NOT NULL DEFAULT (DATETIME('now','localtime')),
     updated_at          DATETIME      NOT NULL DEFAULT (DATETIME('now','localtime'))
