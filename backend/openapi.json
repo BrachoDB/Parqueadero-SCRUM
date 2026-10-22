@@ -1,0 +1,580 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Sistema de Gestión de Parqueaderos",
+    "description": "API REST para el control de acceso y gestión de vehículos en parqueadero.",
+    "contact": {
+      "name": "Equipo Scrum - Sprint 1"
+    },
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/vehiculos/entrada": {
+      "post": {
+        "tags": [
+          "Registro de Vehículos"
+        ],
+        "summary": "RF-01: Registrar entrada de vehículo",
+        "description": "**RF-01**: Registra la entrada de un vehículo al parqueadero.\n- Captura automáticamente la **hora exacta de entrada** (server-side).\n- Valida formato de placa colombiana.\n- Verifica que el vehículo no tenga ya un registro activo.",
+        "operationId": "registrar_entrada_api_v1_vehiculos_entrada_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistroEntradaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistroResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credenciales Basic Auth ausentes o inválidas."
+          },
+          "403": {
+            "description": "Credenciales válidas, pero el rol no permite la operación."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBasic": []
+          }
+        ]
+      }
+    },
+    "/api/v1/vehiculos/{placa}/tarifa": {
+      "get": {
+        "tags": [
+          "Tarifas & Rendimiento"
+        ],
+        "summary": "RF-01 Rendimiento: Consultar tarifa acumulada (≤ 2s SLA)",
+        "description": "**RF-01 Rendimiento**: Muestra la tarifa acumulada de un vehículo.\n- Garantía SLA: tiempo de respuesta ≤ **2000 ms**.\n- Usa índice `idx_placa_estado` para búsqueda O(log n).\n- La tarifa base se obtiene desde caché en memoria O(1).",
+        "operationId": "consultar_tarifa_api_v1_vehiculos__placa__tarifa_get",
+        "security": [
+          {
+            "HTTPBasic": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "placa",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Placa"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TarifaConsultaResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credenciales Basic Auth ausentes o inválidas."
+          },
+          "403": {
+            "description": "Credenciales válidas, pero el rol no permite la operación."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vehiculos/salida": {
+      "post": {
+        "tags": [
+          "Registro de Vehículos"
+        ],
+        "summary": "RF-03: Registrar salida y calcular cobro total",
+        "description": "**RF-03**: Registra la salida, calcula tiempo parqueado y cobra según tarifa.\n- Cálculo: `ceil(minutos / 60) * tarifa_hora`\n- Se cobra fracción de hora completa (hora iniciada = hora cobrada).",
+        "operationId": "registrar_salida_api_v1_vehiculos_salida_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistroSalidaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Credenciales Basic Auth ausentes o inválidas."
+          },
+          "403": {
+            "description": "Credenciales válidas, pero el rol no permite la operación."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBasic": []
+          }
+        ]
+      }
+    },
+    "/api/v1/reportes/arqueo": {
+      "get": {
+        "tags": [
+          "Reportes"
+        ],
+        "summary": "RF-04: Reporte de arqueo de caja",
+        "description": "**RF-04**: Genera el reporte de arqueo de caja para una fecha dada.\nSi no se especifica fecha, usa la fecha actual.",
+        "operationId": "arqueo_caja_api_v1_reportes_arqueo_get",
+        "security": [
+          {
+            "HTTPBasic": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "fecha",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Fecha"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Credenciales Basic Auth ausentes o inválidas."
+          },
+          "403": {
+            "description": "Credenciales válidas, pero el rol no permite la operación."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vehiculos/activos": {
+      "get": {
+        "tags": [
+          "Registro de Vehículos"
+        ],
+        "summary": "Vehículos actualmente en el parqueadero",
+        "description": "Lista todos los vehículos que actualmente están dentro del parqueadero.",
+        "operationId": "vehiculos_activos_api_v1_vehiculos_activos_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Credenciales Basic Auth ausentes o inválidas."
+          },
+          "403": {
+            "description": "Credenciales válidas, pero el rol no permite la operación."
+          }
+        },
+        "security": [
+          {
+            "HTTPBasic": []
+          }
+        ]
+      }
+    },
+    "/api/v1/tarifas": {
+      "get": {
+        "tags": [
+          "Tarifas & Rendimiento"
+        ],
+        "summary": "RF-02: Consultar tipos de vehículo y tarifas diferenciales",
+        "description": "**RF-02**: Retorna los tipos de vehículo con sus tarifas diferenciales desde caché.",
+        "operationId": "listar_tarifas_api_v1_tarifas_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Credenciales Basic Auth ausentes o inválidas."
+          },
+          "403": {
+            "description": "Credenciales válidas, pero el rol no permite la operación."
+          }
+        },
+        "security": [
+          {
+            "HTTPBasic": []
+          }
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "Sistema"
+        ],
+        "summary": "Health Check",
+        "operationId": "health_check_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clientes/me/vehiculos": {
+      "get": {
+        "tags": [
+          "Registro de Vehículos"
+        ],
+        "summary": "Consultar el historial de vehículos asociados al cliente autenticado",
+        "description": "Return only the parking records owned by the authenticated customer.",
+        "operationId": "mis_vehiculos_api_v1_clientes_me_vehiculos_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Credenciales Basic Auth ausentes o inválidas."
+          },
+          "403": {
+            "description": "Credenciales válidas, pero el rol no permite la operación."
+          }
+        },
+        "security": [
+          {
+            "HTTPBasic": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "RegistroEntradaRequest": {
+        "properties": {
+          "placa": {
+            "type": "string",
+            "title": "Placa"
+          },
+          "tipo_vehiculo_id": {
+            "type": "integer",
+            "title": "Tipo Vehiculo Id"
+          },
+          "operador_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operador Id"
+          },
+          "cliente_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cliente Id"
+          },
+          "observaciones": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observaciones"
+          }
+        },
+        "type": "object",
+        "required": [
+          "placa",
+          "tipo_vehiculo_id"
+        ],
+        "title": "RegistroEntradaRequest",
+        "description": "RF-01: Modelo para registro de entrada de vehículo."
+      },
+      "RegistroResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "placa": {
+            "type": "string",
+            "title": "Placa"
+          },
+          "tipo_vehiculo": {
+            "type": "string",
+            "title": "Tipo Vehiculo"
+          },
+          "tarifa_hora": {
+            "type": "number",
+            "title": "Tarifa Hora"
+          },
+          "hora_entrada": {
+            "type": "string",
+            "title": "Hora Entrada"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "mensaje": {
+            "type": "string",
+            "title": "Mensaje"
+          },
+          "tiempo_respuesta_ms": {
+            "type": "number",
+            "title": "Tiempo Respuesta Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "placa",
+          "tipo_vehiculo",
+          "tarifa_hora",
+          "hora_entrada",
+          "estado",
+          "mensaje",
+          "tiempo_respuesta_ms"
+        ],
+        "title": "RegistroResponse"
+      },
+      "RegistroSalidaRequest": {
+        "properties": {
+          "registro_id": {
+            "type": "integer",
+            "title": "Registro Id"
+          },
+          "operador_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operador Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "registro_id"
+        ],
+        "title": "RegistroSalidaRequest",
+        "description": "RF-03: Modelo para registro de salida y liquidación."
+      },
+      "TarifaConsultaResponse": {
+        "properties": {
+          "placa": {
+            "type": "string",
+            "title": "Placa"
+          },
+          "tipo_vehiculo": {
+            "type": "string",
+            "title": "Tipo Vehiculo"
+          },
+          "tarifa_hora": {
+            "type": "number",
+            "title": "Tarifa Hora"
+          },
+          "hora_entrada": {
+            "type": "string",
+            "title": "Hora Entrada"
+          },
+          "minutos_transcurridos": {
+            "type": "integer",
+            "title": "Minutos Transcurridos"
+          },
+          "tarifa_acumulada": {
+            "type": "number",
+            "title": "Tarifa Acumulada"
+          },
+          "tiempo_respuesta_ms": {
+            "type": "number",
+            "title": "Tiempo Respuesta Ms"
+          },
+          "cumple_sla": {
+            "type": "boolean",
+            "title": "Cumple Sla"
+          }
+        },
+        "type": "object",
+        "required": [
+          "placa",
+          "tipo_vehiculo",
+          "tarifa_hora",
+          "hora_entrada",
+          "minutos_transcurridos",
+          "tarifa_acumulada",
+          "tiempo_respuesta_ms",
+          "cumple_sla"
+        ],
+        "title": "TarifaConsultaResponse",
+        "description": "RF-01 Rendimiento: Respuesta de consulta de tarifa en ≤ 2s."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBasic": {
+        "type": "http",
+        "scheme": "basic"
+      }
+    }
+  }
+}

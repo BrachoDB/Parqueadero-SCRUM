@@ -315,6 +315,45 @@ uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 | 📄 ReDoc | http://localhost:8000/redoc |
 | ❤️ Health Check | http://localhost:8000/health |
 
+### Autenticación y autorización
+
+Todos los endpoints de negocio requieren **HTTP Basic Auth** por el header
+`Authorization`; `/health`, `/salud` y la documentación OpenAPI quedan públicos
+para diagnóstico y descubrimiento. Los roles son estrictamente `admin`,
+`operador` y `cliente`: el administrador tiene acceso global, el operador
+gestiona operaciones del parqueadero y el cliente solo consulta registros
+asociados a su cuenta. El arqueo de caja está reservado al administrador.
+
+Provisiona usuarios de forma interactiva (la contraseña no se pasa por línea de
+comandos ni se almacena en texto plano):
+
+```bash
+# Local, desde la raíz del repositorio
+python -m backend.manage_users --username admin --role admin
+
+# En el contenedor Docker
+docker compose exec api python -m backend.manage_users --username operador1 --role operador
+```
+
+Las contraseñas deben tener al menos 12 caracteres y se almacenan con PBKDF2-SHA256
+y sal aleatoria. Las cuentas de prueba se crean únicamente desde
+[`tests/seeders.py`](tests/seeders.py); sus credenciales no son válidas en producción.
+Basic Auth no cifra el tráfico: despliega detrás de HTTPS/TLS y no expongas el
+servicio directamente por HTTP en producción.
+
+### Ejecutar con Docker Compose
+```bash
+docker compose up --build -d
+```
+
+La API queda disponible en `http://localhost:8000`; la base SQLite persiste en el volumen `parqueadero_data`.
+Para detener el servicio sin borrar los datos, ejecuta `docker compose down`.
+
+### Contratos OpenAPI y auditoría
+- API principal: [`backend/openapi.json`](backend/openapi.json)
+- API independiente de cálculo: [`parqueadero/openapi.json`](parqueadero/openapi.json)
+- Auditoría estática: [`backend/SECURITY_AUDIT.md`](backend/SECURITY_AUDIT.md)
+
 ### 5. Ejecutar pruebas
 ```bash
 pytest tests/test_rendimiento_sla.py -v
@@ -330,8 +369,17 @@ pytest tests/test_rendimiento_sla.py -v
 | `POST` | `/api/v1/vehiculos/salida` | RF-03 | Registra salida y liquida cobro |
 | `GET` | `/api/v1/vehiculos/activos` | RF-01 | Lista vehículos en el parqueadero |
 | `GET` | `/api/v1/vehiculos/{placa}/tarifa` | RF-01-PERF | Tarifa acumulada (SLA ≤ 2s) |
+| `GET` | `/api/v1/clientes/me/vehiculos` | Seguridad | Historial del cliente autenticado |
 | `GET` | `/api/v1/tarifas` | RF-02 | Tarifas diferenciales por tipo |
 | `GET` | `/api/v1/reportes/arqueo` | RF-04 | Arqueo de caja por fecha |
+| `GET` | `/health` | — | Estado del servicio |
+
+Las rutas de negocio requieren `-u usuario:contraseña` con `curl`; por ejemplo:
+
+```bash
+curl -u operador1 "http://localhost:8000/api/v1/vehiculos/activos"
+curl -u cliente1 "http://localhost:8000/api/v1/clientes/me/vehiculos"
+```
 
 ### Ejemplo — Registro de Entrada
 ```bash
